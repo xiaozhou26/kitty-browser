@@ -7,6 +7,11 @@ const SUPPORTED_PLATFORMS = {
 
 const MIN_CHROME_VERSION = 140;
 const MAX_CHROME_VERSION = 150;
+const sharedXvfbState = {
+  session: null,
+  refCount: 0,
+  display: '',
+};
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -19,6 +24,31 @@ function shouldStartXvfb(options = {}) {
 async function startXvfbSessionIfNeeded(options = {}) {
   if (!shouldStartXvfb(options)) {
     return null;
+  }
+
+  if (sharedXvfbState.session) {
+    sharedXvfbState.refCount += 1;
+    return {
+      managed: true,
+      display: sharedXvfbState.display,
+      stop() {
+        sharedXvfbState.refCount = Math.max(0, sharedXvfbState.refCount - 1);
+
+        if (sharedXvfbState.refCount === 0 && sharedXvfbState.session) {
+          try {
+            sharedXvfbState.session.stopSync();
+          } catch {
+          }
+
+          if (process.env.DISPLAY === sharedXvfbState.display) {
+            delete process.env.DISPLAY;
+          }
+
+          sharedXvfbState.session = null;
+          sharedXvfbState.display = '';
+        }
+      },
+    };
   }
 
   let Xvfb;
@@ -34,7 +64,31 @@ async function startXvfbSessionIfNeeded(options = {}) {
       xvfb_args: ['-screen', '0', '1920x1080x24', '-ac'],
     });
     session.startSync();
-    return session;
+    sharedXvfbState.session = session;
+    sharedXvfbState.refCount = 1;
+    sharedXvfbState.display = process.env.DISPLAY || '';
+
+    return {
+      managed: true,
+      display: sharedXvfbState.display,
+      stop() {
+        sharedXvfbState.refCount = Math.max(0, sharedXvfbState.refCount - 1);
+
+        if (sharedXvfbState.refCount === 0 && sharedXvfbState.session) {
+          try {
+            sharedXvfbState.session.stopSync();
+          } catch {
+          }
+
+          if (process.env.DISPLAY === sharedXvfbState.display) {
+            delete process.env.DISPLAY;
+          }
+
+          sharedXvfbState.session = null;
+          sharedXvfbState.display = '';
+        }
+      },
+    };
   } catch (error) {
     throw new Error(
       `Failed to start xvfb automatically. Make sure the system package is installed (for example: apt install -y xvfb). Original error: ${error.message}`
@@ -42,8 +96,8 @@ async function startXvfbSessionIfNeeded(options = {}) {
   }
 }
 
-function attachXvfbLifecycle(browser, xvfbSession) {
-  if (!xvfbSession) {
+function attachXvfbLifecycle(browser, xvfbHandle) {
+  if (!xvfbHandle) {
     return browser;
   }
 
@@ -55,7 +109,7 @@ function attachXvfbLifecycle(browser, xvfbSession) {
 
     stopped = true;
     try {
-      xvfbSession.stopSync();
+      xvfbHandle.stop();
     } catch {
     }
   };
