@@ -9,16 +9,21 @@ const MIN_CHROME_VERSION = 140;
 const MAX_CHROME_VERSION = 150;
 const sharedXvfbState = {
   session: null,
-  refCount: 0,
   display: '',
+  cleanupRegistered: false,
+  startedByKitty: false,
 };
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function canUseAutoXvfb(options = {}) {
+  return process.platform === 'linux' && options.headless === false && options.disableXvfb !== true;
+}
+
 function hasUsableDisplay() {
-  const display = String(process.env.DISPLAY || '').trim();
+  const display = String(arguments.length > 0 ? arguments[0] : process.env.DISPLAY || '').trim();
 
   if (!display) {
     return false;
@@ -38,37 +43,68 @@ function hasUsableDisplay() {
 }
 
 function shouldStartXvfb(options = {}) {
-  return process.platform === 'linux' && options.headless === false && !hasUsableDisplay() && options.disableXvfb !== true;
+  return canUseAutoXvfb(options) && !hasUsableDisplay();
 }
 
-async function startXvfbSessionIfNeeded(options = {}) {
-  if (!shouldStartXvfb(options)) {
+function isMissingXServerError(error) {
+  return /Missing X server/i.test(String(error && error.message ? error.message : error));
+}
+
+function stopSharedXvfbSession() {
+  if (!sharedXvfbState.session) {
+    return;
+  }
+
+  try {
+    sharedXvfbState.session.stopSync();
+  } catch {
+  }
+
+  if (process.env.DISPLAY === sharedXvfbState.display) {
+    delete process.env.DISPLAY;
+  }
+
+  sharedXvfbState.session = null;
+  sharedXvfbState.display = '';
+  sharedXvfbState.startedByKitty = false;
+}
+
+function registerSharedXvfbCleanup() {
+  if (sharedXvfbState.cleanupRegistered) {
+    return;
+  }
+
+  sharedXvfbState.cleanupRegistered = true;
+  process.once('exit', stopSharedXvfbSession);
+
+  const registerSignal = (signal, exitCode) => {
+    process.once(signal, () => {
+      stopSharedXvfbSession();
+      process.exit(exitCode);
+    });
+  };
+
+  registerSignal('SIGINT', 130);
+  registerSignal('SIGTERM', 143);
+  registerSignal('SIGQUIT', 131);
+}
+
+async function startXvfbSessionIfNeeded(options = {}, { force = false } = {}) {
+  if (!force && !shouldStartXvfb(options)) {
     return null;
   }
 
   if (sharedXvfbState.session) {
-    sharedXvfbState.refCount += 1;
-    return {
-      managed: true,
-      display: sharedXvfbState.display,
-      stop() {
-        sharedXvfbState.refCount = Math.max(0, sharedXvfbState.refCount - 1);
+    if (hasUsableDisplay(sharedXvfbState.display)) {
+      process.env.DISPLAY = sharedXvfbState.display;
+      return {
+        managed: true,
+        display: sharedXvfbState.display,
+        persistent: true,
+      };
+    }
 
-        if (sharedXvfbState.refCount === 0 && sharedXvfbState.session) {
-          try {
-            sharedXvfbState.session.stopSync();
-          } catch {
-          }
-
-          if (process.env.DISPLAY === sharedXvfbState.display) {
-            delete process.env.DISPLAY;
-          }
-
-          sharedXvfbState.session = null;
-          sharedXvfbState.display = '';
-        }
-      },
-    };
+    stopSharedXvfbSession();
   }
 
   let Xvfb;
@@ -84,30 +120,14 @@ async function startXvfbSessionIfNeeded(options = {}) {
       xvfb_args: ['-screen', '0', '1920x1080x24', '-ac'],
     });
     session.startSync();
+    registerSharedXvfbCleanup();
     sharedXvfbState.session = session;
-    sharedXvfbState.refCount = 1;
     sharedXvfbState.display = process.env.DISPLAY || '';
-
+    sharedXvfbState.startedByKitty = true;
     return {
       managed: true,
       display: sharedXvfbState.display,
-      stop() {
-        sharedXvfbState.refCount = Math.max(0, sharedXvfbState.refCount - 1);
-
-        if (sharedXvfbState.refCount === 0 && sharedXvfbState.session) {
-          try {
-            sharedXvfbState.session.stopSync();
-          } catch {
-          }
-
-          if (process.env.DISPLAY === sharedXvfbState.display) {
-            delete process.env.DISPLAY;
-          }
-
-          sharedXvfbState.session = null;
-          sharedXvfbState.display = '';
-        }
-      },
+      persistent: true,
     };
   } catch (error) {
     throw new Error(
@@ -117,33 +137,6 @@ async function startXvfbSessionIfNeeded(options = {}) {
 }
 
 function attachXvfbLifecycle(browser, xvfbHandle) {
-  if (!xvfbHandle) {
-    return browser;
-  }
-
-  let stopped = false;
-  const stopSession = () => {
-    if (stopped) {
-      return;
-    }
-
-    stopped = true;
-    try {
-      xvfbHandle.stop();
-    } catch {
-    }
-  };
-
-  const originalClose = browser.close.bind(browser);
-  browser.close = async (...args) => {
-    try {
-      return await originalClose(...args);
-    } finally {
-      stopSession();
-    }
-  };
-
-  browser.on('disconnected', stopSession);
   return browser;
 }
 
@@ -411,12 +404,19 @@ async function launch(options = {}) {
     attachXvfbLifecycle(browser, xvfbSession);
     return decorateBrowser(browser, kittyOptions);
   } catch (error) {
-    if (xvfbSession) {
+    if (!xvfbSession && canUseAutoXvfb(runtimeOptions) && isMissingXServerError(error)) {
+      delete process.env.DISPLAY;
+      const forcedXvfbSession = await startXvfbSessionIfNeeded(runtimeOptions, { force: true });
+
       try {
-        xvfbSession.stop();
-      } catch {
+        const browser = await cloakLaunch(launchOptions);
+        attachXvfbLifecycle(browser, forcedXvfbSession);
+        return decorateBrowser(browser, kittyOptions);
+      } catch (retryError) {
+        throw retryError;
       }
     }
+
     throw error;
   }
 }
@@ -430,12 +430,19 @@ async function launchPersistentContext(options = {}) {
     attachXvfbLifecycle(browser, xvfbSession);
     return decorateBrowser(browser, kittyOptions);
   } catch (error) {
-    if (xvfbSession) {
+    if (!xvfbSession && canUseAutoXvfb(runtimeOptions) && isMissingXServerError(error)) {
+      delete process.env.DISPLAY;
+      const forcedXvfbSession = await startXvfbSessionIfNeeded(runtimeOptions, { force: true });
+
       try {
-        xvfbSession.stop();
-      } catch {
+        const browser = await cloakLaunchPersistentContext(launchOptions);
+        attachXvfbLifecycle(browser, forcedXvfbSession);
+        return decorateBrowser(browser, kittyOptions);
+      } catch (retryError) {
+        throw retryError;
       }
     }
+
     throw error;
   }
 }

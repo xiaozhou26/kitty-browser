@@ -13,7 +13,8 @@ Linux 说明：
 
 - 当 `headless: false` 且系统没有可用的 `DISPLAY` 时，库会自动尝试启动 `xvfb`
 - 这样调用方通常只需要直接执行 `node demo.js`
-- 多个并发浏览器实例会共享同一个 `xvfb` 会话，避免实例之间互相关停导致 `Missing X server` 错误
+- 第一次 `launch()` 成功后会在当前 Node 进程里固定一个长期 `DISPLAY`
+- 后续同进程里的所有浏览器实例都会复用这个 `DISPLAY`，行为更接近 `xvfb-run -a`
 - 如果系统里残留了失效的 `DISPLAY` 环境变量，库也会自动检测并回退到 `xvfb`
 - 如果你不想自动启用，可以传 `disableXvfb: true`
 - Linux 主机仍然需要安装系统级 `xvfb`
@@ -187,4 +188,4 @@ console.log(buildChromeUserAgent("Windows", 146));
 - `chromeUserAgent.version` 的支持范围是 `140` 到 `150`
 - 启动时传入 `chromeUserAgent` 后，会自动同步 `--fingerprint-brand=Chrome` 和对应的 `--fingerprint-brand-version`
 - `turnstile: true` 提供的是页面交互辅助能力，适合需要自动点击 Turnstile 区域的自动化流程
-- Linux 下自动 `xvfb` 支持并发浏览器实例共享显示环境，并会检测失效的 `DISPLAY`
+- Linux 下自动 `xvfb` 会在同一 Node 进程内固定长期 `DISPLAY`，并会检测失效的 `DISPLAY`
