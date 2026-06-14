@@ -17,8 +17,28 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function hasUsableDisplay() {
+  const display = String(process.env.DISPLAY || '').trim();
+
+  if (!display) {
+    return false;
+  }
+
+  const match = display.match(/:([0-9]+)/);
+  if (!match) {
+    return true;
+  }
+
+  try {
+    require('fs').accessSync(`/tmp/.X11-unix/X${match[1]}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function shouldStartXvfb(options = {}) {
-  return process.platform === 'linux' && options.headless === false && !process.env.DISPLAY && options.disableXvfb !== true;
+  return process.platform === 'linux' && options.headless === false && !hasUsableDisplay() && options.disableXvfb !== true;
 }
 
 async function startXvfbSessionIfNeeded(options = {}) {
@@ -393,7 +413,7 @@ async function launch(options = {}) {
   } catch (error) {
     if (xvfbSession) {
       try {
-        xvfbSession.stopSync();
+        xvfbSession.stop();
       } catch {
       }
     }
@@ -412,7 +432,7 @@ async function launchPersistentContext(options = {}) {
   } catch (error) {
     if (xvfbSession) {
       try {
-        xvfbSession.stopSync();
+        xvfbSession.stop();
       } catch {
       }
     }

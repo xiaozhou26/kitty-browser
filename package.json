@@ -1,6 +1,6 @@
 {
   "name": "kitty-browser",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "CloakBrowser/Puppeteer wrapper with Turnstile automation and Chrome UA helpers.",
   "main": "index.js",
   "exports": {
