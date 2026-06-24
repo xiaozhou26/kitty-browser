@@ -4,6 +4,8 @@ const SUPPORTED_PLATFORMS = {
   macos: 'MacOS',
   android: 'Android',
 };
+const fs = require('fs');
+const path = require('path');
 
 const MIN_CHROME_VERSION = 140;
 const MAX_CHROME_VERSION = 150;
@@ -41,13 +43,19 @@ async function ensureCloakBrowserBinaryReady() {
   }
 
   sharedBinaryState.promise = (async () => {
-    const path = require('path');
     const { pathToFileURL } = require('url');
-    const cloakbrowserEntryPath = require.resolve('cloakbrowser');
-    const cloakbrowserDownloadModulePath = path.join(
-      path.dirname(cloakbrowserEntryPath),
-      'download.js',
-    );
+    const lookupDirs = [
+      path.join(__dirname, 'node_modules'),
+      ...((require.resolve.paths && require.resolve.paths('cloakbrowser')) || []),
+    ];
+    const cloakbrowserDownloadModulePath = lookupDirs
+      .map((dir) => path.join(dir, 'cloakbrowser', 'dist', 'download.js'))
+      .find((candidate) => fs.existsSync(candidate));
+
+    if (!cloakbrowserDownloadModulePath) {
+      throw new Error("Could not locate cloakbrowser/dist/download.js. Make sure cloakbrowser@0.3.31 is installed.");
+    }
+
     const { ensureBinary } = await import(
       pathToFileURL(cloakbrowserDownloadModulePath).href
     );
