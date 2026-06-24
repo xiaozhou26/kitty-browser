@@ -13,9 +13,60 @@ const sharedXvfbState = {
   cleanupRegistered: false,
   startedByKitty: false,
 };
+const sharedBinaryState = {
+  ready: false,
+  promise: null,
+};
+
+if (process.env.CLOAKBROWSER_AUTO_UPDATE == null) {
+  process.env.CLOAKBROWSER_AUTO_UPDATE = 'false';
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function ensureCloakBrowserBinaryReady() {
+  if (process.env.CLOAKBROWSER_BINARY_PATH) {
+    sharedBinaryState.ready = true;
+    return process.env.CLOAKBROWSER_BINARY_PATH;
+  }
+
+  if (sharedBinaryState.ready) {
+    return process.env.CLOAKBROWSER_BINARY_PATH || null;
+  }
+
+  if (sharedBinaryState.promise) {
+    return sharedBinaryState.promise;
+  }
+
+  sharedBinaryState.promise = (async () => {
+    const path = require('path');
+    const { pathToFileURL } = require('url');
+    const cloakbrowserEntryPath = require.resolve('cloakbrowser');
+    const cloakbrowserDownloadModulePath = path.join(
+      path.dirname(cloakbrowserEntryPath),
+      'download.js',
+    );
+    const { ensureBinary } = await import(
+      pathToFileURL(cloakbrowserDownloadModulePath).href
+    );
+    const binaryPath = await ensureBinary();
+
+    if (binaryPath && !process.env.CLOAKBROWSER_BINARY_PATH) {
+      process.env.CLOAKBROWSER_BINARY_PATH = binaryPath;
+    }
+
+    sharedBinaryState.ready = true;
+    return binaryPath;
+  })();
+
+  try {
+    return await sharedBinaryState.promise;
+  } catch (error) {
+    sharedBinaryState.promise = null;
+    throw error;
+  }
 }
 
 function canUseAutoXvfb(options = {}) {
@@ -398,6 +449,7 @@ async function decorateBrowser(browser, kittyOptions) {
 async function launch(options = {}) {
   const { launch: cloakLaunch } = await import('cloakbrowser/puppeteer');
   const { launchOptions, kittyOptions, runtimeOptions } = normalizeLaunchOptions(options);
+  await ensureCloakBrowserBinaryReady();
   const xvfbSession = await startXvfbSessionIfNeeded(runtimeOptions);
   try {
     const browser = await cloakLaunch(launchOptions);
@@ -424,6 +476,7 @@ async function launch(options = {}) {
 async function launchPersistentContext(options = {}) {
   const { launchPersistentContext: cloakLaunchPersistentContext } = await import('cloakbrowser/puppeteer');
   const { launchOptions, kittyOptions, runtimeOptions } = normalizeLaunchOptions(options);
+  await ensureCloakBrowserBinaryReady();
   const xvfbSession = await startXvfbSessionIfNeeded(runtimeOptions);
   try {
     const browser = await cloakLaunchPersistentContext(launchOptions);

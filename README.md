@@ -43,6 +43,8 @@ npm install kitty-browser
 - 发布包内已直接 bundled `cloakbrowser@0.3.31`
 - 安装 `kitty-browser` 时不需要再单独安装 `cloakbrowser`
 - 浏览器二进制仍然按 `cloakbrowser` 自身逻辑在运行时下载
+- 默认会关闭 `cloakbrowser` 的版本更新提示与后台更新检查
+- 同一 Node 进程里首次准备浏览器二进制时会自动串行化，避免并发 `launch()` 时重复下载
 
 ## 快速开始
 
@@ -196,3 +198,4 @@ console.log(buildChromeUserAgent("Windows", 146));
 - `turnstile: true` 提供的是页面交互辅助能力，适合需要自动点击 Turnstile 区域的自动化流程
 - Linux 下自动 `xvfb` 会在同一 Node 进程内固定长期 `DISPLAY`，并会检测失效的 `DISPLAY`
 - npm 发布包已内置 `cloakbrowser@0.3.31`，避免安装时再依赖外部拉取该版本
+- 默认关闭 `cloakbrowser` 的更新提示，并在同进程内只触发一次首次二进制准备
